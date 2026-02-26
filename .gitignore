@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Installer outputs
+installer/output/
+
+# IDE files
+.vscode/
+.idea/
+
+# Local runtime data (contains OTP secrets)
+data/accounts.json
+
+# OS / logs
+.DS_Store
+Thumbs.db
+*.log
