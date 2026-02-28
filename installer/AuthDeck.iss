@@ -1,6 +1,8 @@
 #define MyAppName "AuthDeck"
-#define MyAppVersion "1.0.2"
-#define MyAppPublisher "AuthDeck"
+#define MyAppVersion "1.0.4"
+#define MyAppPublisher "Supan Roy"
+#define MyAppSupportEmail "support@supanroy.com"
+#define MyAppPublisherURL "https://supanroy.com"
 #define MyAppExeName "AuthDeck.exe"
 
 [Setup]
@@ -8,6 +10,10 @@ AppId={{A18E5B3D-6D4A-4E2F-9B9A-08A4E33C1DA7}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppPublisherURL}
+AppSupportURL=mailto:{#MyAppSupportEmail}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoDescription={#MyAppName}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=output

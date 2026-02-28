@@ -122,6 +122,28 @@ class SmoothProgressBar(QProgressBar):
         self._animation.start()
 
 
+class ReorderableAccountList(QListWidget):
+    """Account list with drag-drop row reordering support."""
+
+    rows_moved = pyqtSignal(int, int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._drag_start_row = -1
+
+    def startDrag(self, supported_actions) -> None:
+        self._drag_start_row = self.currentRow()
+        super().startDrag(supported_actions)
+
+    def dropEvent(self, event) -> None:
+        original_row = self._drag_start_row
+        super().dropEvent(event)
+        target_row = self.currentRow()
+        if original_row >= 0 and target_row >= 0 and original_row != target_row:
+            self.rows_moved.emit(original_row, target_row)
+        self._drag_start_row = -1
+
+
 class CircularTimerWidget(QWidget):
     """Circular countdown timer for the main panel."""
 
@@ -839,10 +861,15 @@ class MainWindow(QMainWindow):
         self.search_input.textChanged.connect(self._on_search_text_changed)
         side_layout.addWidget(self.search_input)
 
-        self.account_list = QListWidget(self.sidebar)
+        self.account_list = ReorderableAccountList(self.sidebar)
+        self.account_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.account_list.setDragEnabled(True)
+        self.account_list.setAcceptDrops(True)
+        self.account_list.setDropIndicatorShown(True)
         self.account_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.account_list.customContextMenuRequested.connect(self._show_account_context_menu)
         self.account_list.currentRowChanged.connect(self._sync_main_display)
+        self.account_list.rows_moved.connect(self._on_account_rows_moved)
         side_layout.addWidget(self.account_list, 1)
 
         body_layout.addWidget(self.sidebar, 1)
@@ -969,6 +996,25 @@ class MainWindow(QMainWindow):
 
     def _on_search_text_changed(self, _text: str) -> None:
         self._load_accounts_to_list()
+
+    def _on_account_rows_moved(self, from_row: int, to_row: int) -> None:
+        if from_row == to_row:
+            return
+
+        if self.search_input.text().strip():
+            self._show_status("Clear search to reorder accounts.", is_error=True, timeout=3000)
+            self._load_accounts_to_list()
+            return
+
+        if len(self._visible_account_indices) != len(self._storage.accounts):
+            self._show_status("Reorder is only available in full list view.", is_error=True, timeout=3000)
+            self._load_accounts_to_list()
+            return
+
+        self._storage.move_account(from_row, to_row)
+        self._load_accounts_to_list()
+        if 0 <= to_row < self.account_list.count():
+            self.account_list.setCurrentRow(to_row)
 
     def _storage_index_for_row(self, row: int) -> int | None:
         if row < 0 or row >= len(self._visible_account_indices):
@@ -1434,6 +1480,95 @@ class MainWindow(QMainWindow):
         dialog.pin_setup_requested.connect(lambda: self._handle_pin_setup(dialog))
         dialog.pin_remove_requested.connect(lambda: self._handle_pin_remove(dialog))
         dialog.pin_forgot_requested.connect(lambda: self._handle_pin_forgot(dialog))
+        dialog.about_requested.connect(self._show_about_dialog)
+        dialog.exec()
+
+    def _show_about_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About AuthDeck")
+        dialog.setModal(True)
+        dialog.resize(440, 250)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        title = QLabel("AuthDeck v1.0.4", dialog)
+        title.setObjectName("aboutTitle")
+        layout.addWidget(title)
+
+        details = QLabel("Developer: Supan Roy", dialog)
+        details.setObjectName("aboutDetails")
+        details.setTextFormat(Qt.TextFormat.RichText)
+        details.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        details.setOpenExternalLinks(True)
+        layout.addWidget(details)
+
+        email = QLabel("Email: <a href='mailto:support@supanroy.com'>support@supanroy.com</a>", dialog)
+        email.setObjectName("aboutDetails")
+        email.setTextFormat(Qt.TextFormat.RichText)
+        email.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        email.setOpenExternalLinks(True)
+        layout.addWidget(email)
+
+        links = QLabel(
+            "GitHub: <a href='https://github.com/Supan-Roy'>Supan-Roy</a><br/>"
+            "LinkedIn: <a href='https://www.linkedin.com/in/supanroy'>supanroy</a>",
+            dialog,
+        )
+        links.setObjectName("aboutLinks")
+        links.setTextFormat(Qt.TextFormat.RichText)
+        links.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        links.setOpenExternalLinks(True)
+        layout.addWidget(links)
+
+        close_button = QPushButton("Close", dialog)
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+        if self._current_theme == "light":
+            dialog.setStyleSheet(
+                """
+                QDialog {
+                    background-color: #ffffff;
+                    border: 1px solid #b8c9dd;
+                    border-radius: 12px;
+                }
+                QLabel#aboutTitle { color: #000000; font-size: 18px; font-weight: 800; }
+                QLabel#aboutDetails, QLabel#aboutLinks { color: #000000; font-size: 13px; font-weight: 700; }
+                QLabel#aboutDetails a, QLabel#aboutLinks a { color: #000000; text-decoration: none; font-weight: 700; }
+                QLabel#aboutDetails a:hover, QLabel#aboutLinks a:hover { text-decoration: underline; }
+                QPushButton {
+                    background-color: #3f7cc8;
+                    border: 1px solid #2f67ad;
+                    border-radius: 9px;
+                    padding: 7px 14px;
+                    color: #ffffff;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #336eb8; }
+                """
+            )
+        else:
+            dialog.setStyleSheet(
+                """
+                QDialog { background-color: #05070a; border: 1px solid #22344d; border-radius: 12px; }
+                QLabel#aboutTitle { color: #eef4ff; font-size: 18px; font-weight: 800; }
+                QLabel#aboutDetails, QLabel#aboutLinks { color: #c9daef; font-size: 13px; }
+                QLabel#aboutDetails a, QLabel#aboutLinks a { color: #8fbaff; text-decoration: none; }
+                QLabel#aboutDetails a:hover, QLabel#aboutLinks a:hover { text-decoration: underline; }
+                QPushButton {
+                    background-color: #2f67ad;
+                    border: 1px solid #4f89ce;
+                    border-radius: 9px;
+                    padding: 7px 14px;
+                    color: #ffffff;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #3b76c1; }
+                """
+            )
+
         dialog.exec()
 
     def _handle_pin_setup(self, settings_dialog: SettingsDialog) -> None:

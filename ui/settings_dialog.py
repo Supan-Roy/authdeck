@@ -4,8 +4,8 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -21,6 +21,7 @@ class SettingsDialog(QDialog):
     pin_setup_requested = pyqtSignal()
     pin_remove_requested = pyqtSignal()
     pin_forgot_requested = pyqtSignal()
+    about_requested = pyqtSignal()
 
     def __init__(self, current_theme: str, pin_enabled: bool, parent=None) -> None:
         super().__init__(parent)
@@ -65,10 +66,18 @@ class SettingsDialog(QDialog):
 
         root_layout.addLayout(form_layout)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        button_box.rejected.connect(self.reject)
-        button_box.accepted.connect(self.accept)
-        root_layout.addWidget(button_box)
+        footer_layout = QHBoxLayout()
+        self.about_button = QPushButton("About", self)
+        self.about_button.setObjectName("aboutMiniButton")
+        self.about_button.clicked.connect(self.about_requested.emit)
+        footer_layout.addWidget(self.about_button, 0)
+        footer_layout.addStretch(1)
+
+        close_button = QPushButton("Close", self)
+        close_button.setObjectName("closeMiniButton")
+        close_button.clicked.connect(self.reject)
+        footer_layout.addWidget(close_button, 0)
+        root_layout.addLayout(footer_layout)
 
         self._update_pin_controls()
         self._apply_theme(self._theme)
@@ -108,6 +117,10 @@ class SettingsDialog(QDialog):
                     outline: 0;
                 }
                 QPushButton:hover { background-color: #e5edf8; }
+                QPushButton#aboutMiniButton, QPushButton#closeMiniButton {
+                    padding: 6px 12px;
+                    min-width: 72px;
+                }
                 """
             )
         else:
@@ -130,5 +143,9 @@ class SettingsDialog(QDialog):
                     outline: 0;
                 }
                 QPushButton:hover { background-color: #1b314d; }
+                QPushButton#aboutMiniButton, QPushButton#closeMiniButton {
+                    padding: 6px 12px;
+                    min-width: 72px;
+                }
                 """
             )

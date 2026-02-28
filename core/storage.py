@@ -96,6 +96,18 @@ class StorageManager:
         del self._accounts[index]
         self._save()
 
+    def move_account(self, from_index: int, to_index: int) -> None:
+        if from_index < 0 or from_index >= len(self._accounts):
+            return
+        if to_index < 0 or to_index >= len(self._accounts):
+            return
+        if from_index == to_index:
+            return
+
+        account = self._accounts.pop(from_index)
+        self._accounts.insert(to_index, account)
+        self._save()
+
     def export_backup(self, destination: Path, password: str) -> None:
         salt = secrets.token_bytes(self._BACKUP_SALT_BYTES)
         nonce = secrets.token_bytes(self._BACKUP_NONCE_BYTES)
