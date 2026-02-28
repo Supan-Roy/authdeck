@@ -7,17 +7,23 @@ import secrets
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 
 class StorageManager:
     """JSON-based storage manager for AuthDeck accounts."""
 
     _PIN_ITERATIONS = 240_000
+    _BACKUP_KDF_ITERATIONS = 600_000
+    _BACKUP_SALT_BYTES = 16
+    _BACKUP_NONCE_BYTES = 12
 
     def __init__(self, file_path: Path) -> None:
         self.file_path = file_path
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self._accounts: list[dict[str, Any]] = []
         self._security: dict[str, Any] = {}
+        self._settings: dict[str, Any] = {}
         self._load()
 
     @property
@@ -43,16 +49,36 @@ class StorageManager:
             security = payload.get("security", {})
             if not isinstance(security, dict):
                 security = {}
+            settings = payload.get("settings", {})
+            if not isinstance(settings, dict):
+                settings = {}
             self._accounts = [self._normalize_account(account) for account in accounts]
             self._security = security
+            self._settings = settings
         except Exception:
             self._accounts = []
             self._security = {}
+            self._settings = {}
             self._save()
 
     def _save(self) -> None:
-        payload = {"accounts": self._accounts, "security": self._security}
+        payload = {
+            "accounts": self._accounts,
+            "security": self._security,
+            "settings": self._settings,
+        }
         self.file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def get_theme(self) -> str:
+        theme = str(self._settings.get("theme", "dark")).lower().strip()
+        return "light" if theme == "light" else "dark"
+
+    def set_theme(self, theme: str) -> None:
+        normalized = "light" if str(theme).lower().strip() == "light" else "dark"
+        if self._settings.get("theme") == normalized:
+            return
+        self._settings["theme"] = normalized
+        self._save()
 
     def add_account(self, account: dict[str, Any]) -> None:
         self._accounts.append(self._normalize_account(account))
@@ -70,18 +96,84 @@ class StorageManager:
         del self._accounts[index]
         self._save()
 
-    def export_backup(self, destination: Path) -> None:
-        payload = {"accounts": self._accounts}
+    def export_backup(self, destination: Path, password: str) -> None:
+        salt = secrets.token_bytes(self._BACKUP_SALT_BYTES)
+        nonce = secrets.token_bytes(self._BACKUP_NONCE_BYTES)
+        key = self._derive_backup_key(password, salt, self._BACKUP_KDF_ITERATIONS)
+
+        plaintext_payload = {"accounts": self._accounts}
+        plaintext = json.dumps(plaintext_payload, separators=(",", ":")).encode("utf-8")
+        ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
+
+        payload = {
+            "version": 2,
+            "encrypted": True,
+            "kdf": {
+                "name": "pbkdf2_sha256",
+                "iterations": self._BACKUP_KDF_ITERATIONS,
+                "salt": base64.b64encode(salt).decode("ascii"),
+            },
+            "cipher": {
+                "name": "aes-256-gcm",
+                "nonce": base64.b64encode(nonce).decode("ascii"),
+            },
+            "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        }
         destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    def import_backup(self, source: Path) -> None:
+    def import_backup(self, source: Path, password: str | None = None) -> None:
         payload = json.loads(source.read_text(encoding="utf-8"))
-        accounts = payload.get("accounts", [])
+
+        if bool(payload.get("encrypted")):
+            if not password:
+                raise ValueError("Backup password is required for this backup")
+
+            kdf_info = payload.get("kdf", {})
+            cipher_info = payload.get("cipher", {})
+            if not isinstance(kdf_info, dict) or not isinstance(cipher_info, dict):
+                raise ValueError("Invalid encrypted backup format")
+
+            encoded_salt = kdf_info.get("salt")
+            encoded_nonce = cipher_info.get("nonce")
+            encoded_ciphertext = payload.get("ciphertext")
+            iterations = int(kdf_info.get("iterations", self._BACKUP_KDF_ITERATIONS) or self._BACKUP_KDF_ITERATIONS)
+            if not encoded_salt or not encoded_nonce or not encoded_ciphertext:
+                raise ValueError("Invalid encrypted backup format")
+
+            try:
+                salt = base64.b64decode(encoded_salt)
+                nonce = base64.b64decode(encoded_nonce)
+                ciphertext = base64.b64decode(encoded_ciphertext)
+                key = self._derive_backup_key(password, salt, iterations)
+                plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+                decrypted_payload = json.loads(plaintext.decode("utf-8"))
+            except Exception as error:  # noqa: BLE001
+                raise ValueError("Incorrect backup password or corrupted backup file") from error
+
+            accounts = decrypted_payload.get("accounts", [])
+        else:
+            accounts = payload.get("accounts", [])
+
         if not isinstance(accounts, list):
             raise ValueError("Backup file must include an accounts list")
 
         self._accounts = [self._normalize_account(account) for account in accounts]
         self._save()
+
+    def is_backup_encrypted(self, source: Path) -> bool:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        return bool(payload.get("encrypted"))
+
+    def _derive_backup_key(self, password: str, salt: bytes, iterations: int) -> bytes:
+        if len(password) < 8:
+            raise ValueError("Backup password must be at least 8 characters")
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            iterations,
+            dklen=32,
+        )
 
     def set_pin(self, pin: str) -> None:
         pin_bytes = pin.strip().encode("utf-8")
@@ -130,6 +222,7 @@ class StorageManager:
     def reset_all_data_for_forgot_pin(self) -> None:
         self._accounts = []
         self._security = {}
+        self._settings = {}
         self._save()
 
     def _normalize_account(self, account: dict[str, Any]) -> dict[str, Any]:

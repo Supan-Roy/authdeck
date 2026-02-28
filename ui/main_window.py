@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QStandardPaths, QTimer, Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QClipboard, QCloseEvent, QIcon, QPixmap
+from PyQt6.QtGui import QAction, QClipboard, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -14,7 +15,6 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -36,8 +36,20 @@ from ui.scan_overlay import ScanOverlay
 from ui.settings_dialog import SettingsDialog
 
 
+def _format_service_name(name: Any) -> str:
+    text = str(name or "Account")
+    if len(text) <= 30:
+        return text
+    return f"{text[:30]}..."
+
+
+MAX_TRAY_COPY_ITEMS = 25
+
+
 class AccountItemWidget(QWidget):
     """Visual widget for an account in the sidebar list."""
+
+    code_clicked = pyqtSignal()
 
     def __init__(self, account: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
@@ -46,7 +58,7 @@ class AccountItemWidget(QWidget):
         root_layout.setContentsMargins(10, 8, 10, 8)
         root_layout.setSpacing(6)
 
-        self.name_label = QLabel(account.get("name", "Account"), self)
+        self.name_label = QLabel(_format_service_name(account.get("name", "Account")), self)
         self.name_label.setObjectName("accountName")
         root_layout.addWidget(self.name_label)
 
@@ -56,21 +68,32 @@ class AccountItemWidget(QWidget):
 
         self.code_label = QLabel("------", self)
         self.code_label.setObjectName("accountCode")
+        self.code_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.code_label.mousePressEvent = self._on_code_label_pressed
         root_layout.addWidget(self.code_label)
 
         self.progress = SmoothProgressBar(self)
+        self.progress.setObjectName("secondaryProgress")
         self.progress.setTextVisible(False)
         self.progress.setMaximum(30)
         self.progress.setValue(0)
+        self.progress.setFixedHeight(20)
         root_layout.addWidget(self.progress)
 
     def update_values(self, account: dict[str, Any], code: str, remaining: int) -> None:
         period = int(account.get("period", 30) or 30)
-        self.name_label.setText(account.get("name", "Account"))
+        self.name_label.setText(_format_service_name(account.get("name", "Account")))
         self.account_label.setText(account.get("account", ""))
         self.code_label.setText(code)
         self.progress.setMaximum(period)
         self.progress.set_smooth_value(remaining)
+
+    def _on_code_label_pressed(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.code_clicked.emit()
+            event.accept()
+            return
+        QLabel.mousePressEvent(self.code_label, event)
 
 
 class SmoothProgressBar(QProgressBar):
@@ -79,7 +102,7 @@ class SmoothProgressBar(QProgressBar):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._animation = QPropertyAnimation(self, b"value", self)
-        self._animation.setDuration(220)
+        self._animation.setDuration(420)
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def set_smooth_value(self, value: int) -> None:
@@ -97,6 +120,66 @@ class SmoothProgressBar(QProgressBar):
         self._animation.setStartValue(current)
         self._animation.setEndValue(target)
         self._animation.start()
+
+
+class CircularTimerWidget(QWidget):
+    """Circular countdown timer for the main panel."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._period = 30
+        self._remaining = 0
+        self._bg_color = QColor("#1f3047")
+        self._progress_color = QColor("#7eb4ff")
+        self._text_color = QColor("#dce8fa")
+        self.setMinimumSize(180, 180)
+        self.setMaximumSize(240, 240)
+
+    def set_countdown(self, period: int, remaining: int) -> None:
+        self._period = max(1, period)
+        self._remaining = max(0, min(remaining, self._period))
+        self.update()
+
+    def set_theme(self, theme: str) -> None:
+        if theme == "light":
+            self._bg_color = QColor("#d2deeb")
+            self._progress_color = QColor("#5b8cc4")
+            self._text_color = QColor("#1f2a35")
+        else:
+            self._bg_color = QColor("#1f3047")
+            self._progress_color = QColor("#7eb4ff")
+            self._text_color = QColor("#dce8fa")
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        center_x = self.width() / 2
+        center_y = self.height() / 2
+        diameter = min(self.width(), self.height()) - 18
+        radius = diameter / 2
+        rect_x = center_x - radius
+        rect_y = center_y - radius
+
+        base_pen = QPen(self._bg_color, 10)
+        base_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(base_pen)
+        painter.drawArc(int(rect_x), int(rect_y), int(diameter), int(diameter), 0, 360 * 16)
+
+        ratio = self._remaining / float(self._period)
+        span_angle = int(-360 * ratio * 16)
+        progress_pen = QPen(self._progress_color, 10)
+        progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(progress_pen)
+        painter.drawArc(int(rect_x), int(rect_y), int(diameter), int(diameter), 90 * 16, span_angle)
+
+        painter.setPen(self._text_color)
+        font = painter.font()
+        font.setPointSize(18)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"{self._remaining}s")
 
 
 class AddAccountChoiceDialog(QDialog):
@@ -248,6 +331,80 @@ class DeleteConfirmDialog(QDialog):
             )
 
 
+class PinConfirmDialog(QDialog):
+    """Themed PIN prompt used for destructive actions like account deletion."""
+
+    def __init__(self, theme: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Confirm Delete")
+        self.setModal(True)
+        self.resize(390, 220)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+
+        title = QLabel("Enter unlock PIN", self)
+        title.setObjectName("pinConfirmTitle")
+        root.addWidget(title)
+
+        self.pin_input = QLineEdit(self)
+        self.pin_input.setPlaceholderText("4-digit PIN")
+        self.pin_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pin_input.setMaxLength(4)
+        root.addWidget(self.pin_input)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+
+        self.cancel_button = QPushButton("Cancel", self)
+        self.cancel_button.setObjectName("pinCancelButton")
+        self.cancel_button.setAutoDefault(False)
+        self.cancel_button.setDefault(False)
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button)
+
+        self.ok_button = QPushButton("Verify", self)
+        self.ok_button.setObjectName("pinVerifyButton")
+        self.ok_button.setAutoDefault(True)
+        self.ok_button.setDefault(True)
+        self.ok_button.clicked.connect(self.accept)
+        buttons.addWidget(self.ok_button)
+
+        root.addLayout(buttons)
+        self.pin_input.returnPressed.connect(self.ok_button.click)
+        self._apply_theme(theme)
+
+    def pin_value(self) -> str:
+        return self.pin_input.text().strip()
+
+    def _apply_theme(self, theme: str) -> None:
+        if theme == "light":
+            self.setStyleSheet(
+                """
+                QDialog { background-color: #ffffff; border: 1px solid #d7e1eb; border-radius: 12px; }
+                QLabel#pinConfirmTitle { color: #1f2a35; font-size: 18px; font-weight: 800; }
+                QLineEdit { background-color: #eff4fa; border: 1px solid #cfddea; border-radius: 9px; padding: 8px 10px; color: #1f2a35; }
+                QPushButton { background-color: #eff4fa; border: 1px solid #cfddea; border-radius: 10px; padding: 8px 14px; color: #1f2a35; font-weight: 700; }
+                QPushButton:hover { background-color: #e4edf8; }
+                QPushButton#pinVerifyButton { background-color: #3f7cc8; border: 1px solid #2f67ad; color: #ffffff; }
+                QPushButton#pinVerifyButton:hover { background-color: #336eb8; }
+                """
+            )
+        else:
+            self.setStyleSheet(
+                """
+                QDialog { background-color: #05070a; border: 1px solid #22344d; border-radius: 12px; }
+                QLabel#pinConfirmTitle { color: #f3f7ff; font-size: 18px; font-weight: 800; }
+                QLineEdit { background-color: #132135; border: 1px solid #2c4870; border-radius: 9px; padding: 8px 10px; color: #eef4ff; }
+                QPushButton { background-color: #132135; border: 1px solid #2c4870; border-radius: 10px; padding: 8px 14px; color: #eef4ff; font-weight: 700; }
+                QPushButton:hover { background-color: #1b314d; }
+                QPushButton#pinVerifyButton { background-color: #2f67ad; border: 1px solid #4f89ce; color: #ffffff; }
+                QPushButton#pinVerifyButton:hover { background-color: #3b76c1; }
+                """
+            )
+
+
 class PinSetupDialog(QDialog):
     """Dialog to set or change a 4-digit PIN."""
 
@@ -353,12 +510,14 @@ class PinUnlockDialog(QDialog):
 
         buttons = QHBoxLayout()
         self.forgot_button = QPushButton("Forgot PIN", self)
+        self.forgot_button.setObjectName("forgotPinButton")
         self.forgot_button.setAutoDefault(False)
         self.forgot_button.setDefault(False)
         self.forgot_button.clicked.connect(self.forgot_requested.emit)
         buttons.addWidget(self.forgot_button)
 
         self.unlock_button = QPushButton("Unlock", self)
+        self.unlock_button.setObjectName("unlockPinButton")
         self.unlock_button.setAutoDefault(True)
         self.unlock_button.setDefault(True)
         self.unlock_button.clicked.connect(self.accept)
@@ -381,11 +540,44 @@ class PinUnlockDialog(QDialog):
         if theme == "light":
             self.setStyleSheet(
                 """
-                QDialog { background-color: #ffffff; border: 1px solid #d7e1eb; border-radius: 12px; }
-                QLabel { color: #1f2a35; }
+                QDialog {
+                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #f7fafe, stop:1 #ecf2fa);
+                    border: 1px solid #c8d5e6;
+                    border-radius: 12px;
+                }
+                QLabel { color: #1f3147; font-weight: 600; }
                 QLabel#pinError { color: #b42318; font-weight: 700; }
-                QLineEdit { background-color: #eff4fa; border: 1px solid #cfddea; border-radius: 8px; padding: 8px 10px; }
-                QPushButton { background-color: #eff4fa; border: 1px solid #cfddea; border-radius: 8px; padding: 8px 10px; }
+                QLineEdit {
+                    background-color: #edf3fa;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 8px;
+                    padding: 8px 10px;
+                    color: #24364a;
+                    font-weight: 700;
+                }
+                QLineEdit:focus { border-color: #7ea5d2; }
+                QPushButton {
+                    background-color: #e3ecf8;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 9px;
+                    padding: 8px 10px;
+                    color: #21354b;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #d8e5f4; border-color: #9fb8d7; }
+                QPushButton#unlockPinButton {
+                    background-color: #3f7cc8;
+                    border: 1px solid #2f67ad;
+                    color: #ffffff;
+                }
+                QPushButton#unlockPinButton:hover { background-color: #336eb8; }
+                QPushButton#forgotPinButton {
+                    background-color: #eef3f9;
+                    border: 1px solid #c2d2e6;
+                    color: #4c6280;
+                }
+                QPushButton#forgotPinButton:hover { background-color: #e2ebf6; }
                 """
             )
         else:
@@ -396,6 +588,152 @@ class PinUnlockDialog(QDialog):
                 QLabel#pinError { color: #ff7b7b; font-weight: 700; }
                 QLineEdit { background-color: #132135; border: 1px solid #2c4870; border-radius: 8px; padding: 8px 10px; color: #eef4ff; }
                 QPushButton { background-color: #132135; border: 1px solid #2c4870; border-radius: 8px; padding: 8px 10px; color: #eef4ff; }
+                QPushButton:hover { background-color: #1b314d; border-color: #406a9f; }
+                QPushButton#unlockPinButton {
+                    background-color: #2f67ad;
+                    border: 1px solid #4f89ce;
+                    color: #ffffff;
+                }
+                QPushButton#unlockPinButton:hover { background-color: #3b76c1; }
+                QPushButton#forgotPinButton { color: #9ab2d0; }
+                """
+            )
+
+
+class BackupPasswordDialog(QDialog):
+    """Themed password dialog used for encrypted backup export/import."""
+
+    def __init__(self, theme: str, title: str, confirm: bool, parent=None) -> None:
+        super().__init__(parent)
+        self._confirm = confirm
+        self._password = ""
+
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.resize(420, 220 if confirm else 180)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        prompt = QLabel(
+            "Set a backup password (min 8 chars)" if confirm else "Enter backup password",
+            self,
+        )
+        layout.addWidget(prompt)
+
+        self.password_input = QLineEdit(self)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.setPlaceholderText("Backup password")
+        layout.addWidget(self.password_input)
+
+        self.confirm_input: QLineEdit | None = None
+        if confirm:
+            self.confirm_input = QLineEdit(self)
+            self.confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.confirm_input.setPlaceholderText("Confirm password")
+            layout.addWidget(self.confirm_input)
+
+        self.error_label = QLabel("", self)
+        self.error_label.setObjectName("backupPasswordError")
+        layout.addWidget(self.error_label)
+
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addStretch(1)
+
+        cancel_button = QPushButton("Cancel", self)
+        cancel_button.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel_button)
+
+        self.continue_button = QPushButton("Continue", self)
+        self.continue_button.setObjectName("backupContinueButton")
+        self.continue_button.clicked.connect(self._validate_and_accept)
+        buttons_layout.addWidget(self.continue_button)
+        layout.addLayout(buttons_layout)
+
+        self.password_input.returnPressed.connect(self._validate_and_accept)
+        if self.confirm_input is not None:
+            self.confirm_input.returnPressed.connect(self._validate_and_accept)
+
+        self._apply_theme(theme)
+
+    def password_value(self) -> str:
+        return self._password
+
+    def _validate_and_accept(self) -> None:
+        password = self.password_input.text()
+        if len(password) < 8:
+            self.error_label.setText("Password must be at least 8 characters")
+            return
+
+        if self._confirm and self.confirm_input is not None and password != self.confirm_input.text():
+            self.error_label.setText("Passwords do not match")
+            return
+
+        self._password = password
+        self.accept()
+
+    def _apply_theme(self, theme: str) -> None:
+        if theme == "light":
+            self.setStyleSheet(
+                """
+                QDialog { background-color: #f6f9fd; border: 1px solid #c8d5e6; border-radius: 12px; }
+                QLabel { color: #1f3147; font-weight: 600; }
+                QLabel#backupPasswordError { color: #b42318; font-weight: 700; }
+                QLineEdit {
+                    background-color: #edf3fa;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 8px;
+                    padding: 7px 10px;
+                    color: #24364a;
+                }
+                QLineEdit:focus { border-color: #7ea5d2; }
+                QPushButton {
+                    background-color: #e3ecf8;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 9px;
+                    padding: 7px 12px;
+                    color: #21354b;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #d8e5f4; border-color: #9fb8d7; }
+                QPushButton#backupContinueButton {
+                    background-color: #3f7cc8;
+                    border: 1px solid #2f67ad;
+                    color: #ffffff;
+                }
+                QPushButton#backupContinueButton:hover { background-color: #336eb8; }
+                """
+            )
+        else:
+            self.setStyleSheet(
+                """
+                QDialog { background-color: #05070a; border: 1px solid #22344d; border-radius: 12px; }
+                QLabel { color: #e8f0ff; font-weight: 600; }
+                QLabel#backupPasswordError { color: #ff7b7b; font-weight: 700; }
+                QLineEdit {
+                    background-color: #132135;
+                    border: 1px solid #2c4870;
+                    border-radius: 8px;
+                    padding: 7px 10px;
+                    color: #e8f0ff;
+                }
+                QLineEdit:focus { border-color: #6ea8fe; }
+                QPushButton {
+                    background-color: #132135;
+                    border: 1px solid #2c4870;
+                    border-radius: 9px;
+                    padding: 7px 12px;
+                    color: #f1f6ff;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #1b314d; border-color: #406a9f; }
+                QPushButton#backupContinueButton {
+                    background-color: #2f67ad;
+                    border: 1px solid #4f89ce;
+                    color: #ffffff;
+                }
+                QPushButton#backupContinueButton:hover { background-color: #3b76c1; }
                 """
             )
 
@@ -424,19 +762,24 @@ class MainWindow(QMainWindow):
 
         self._storage = StorageManager(storage_path)
         self._totp = TOTPManager()
-        self._current_theme = "dark"
+        self._current_theme = self._storage.get_theme()
         self._force_close = False
         self._scan_active = False
+        self._scan_overlay: ScanOverlay | None = None
         self.codes_menu: QMenu | None = None
         self._asset_dir = asset_dir
         self._visible_account_indices: list[int] = []
+        self._copy_feedback_timer = QTimer(self)
+        self._copy_feedback_timer.setSingleShot(True)
+        self._copy_feedback_timer.timeout.connect(self._reset_copy_button_feedback)
+        self._copy_pulse_animation: QPropertyAnimation | None = None
 
         icon_path = asset_dir / "icon.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
         self._build_ui()
-        self._apply_theme(self._current_theme)
+        self._apply_theme(self._current_theme, persist=False)
         self._setup_tray(icon_path)
         self._load_accounts_to_list()
         self._setup_timers()
@@ -466,6 +809,7 @@ class MainWindow(QMainWindow):
         top_bar.addStretch(1)
 
         self.settings_button = QPushButton("Settings", self)
+        self.settings_button.setObjectName("topSettingsButton")
         self.settings_button.clicked.connect(self._open_settings)
         top_bar.addWidget(self.settings_button)
         root_layout.addLayout(top_bar)
@@ -485,6 +829,7 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(logo_label)
 
         self.add_account_button = QPushButton("Add Account", self.sidebar)
+        self.add_account_button.setObjectName("primaryAddButton")
         self.add_account_button.clicked.connect(self._show_add_account_menu)
         side_layout.addWidget(self.add_account_button)
 
@@ -521,24 +866,31 @@ class MainWindow(QMainWindow):
         self.large_code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(self.large_code_label)
 
-        self.main_progress = SmoothProgressBar(self.main_panel)
-        self.main_progress.setTextVisible(True)
-        self.main_progress.setFormat("%v sec")
-        self.main_progress.setMaximum(30)
-        main_layout.addWidget(self.main_progress)
+        self.main_timer = CircularTimerWidget(self.main_panel)
+        main_layout.addWidget(self.main_timer, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         action_buttons_layout = QHBoxLayout()
         action_buttons_layout.setSpacing(10)
+        action_buttons_layout.addStretch(1)
 
         self.copy_button = QPushButton("Copy Code", self.main_panel)
+        self.copy_button.setObjectName("primaryCopyButton")
         self.copy_button.clicked.connect(self._copy_selected_code)
-        self.copy_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.copy_button.setFixedWidth(210)
+        self.copy_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_buttons_layout.addWidget(self.copy_button)
 
+        self._copy_pulse_animation = QPropertyAnimation(self.copy_button, b"geometry", self)
+        self._copy_pulse_animation.setDuration(220)
+        self._copy_pulse_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
         self.delete_button = QPushButton("Delete Code", self.main_panel)
+        self.delete_button.setObjectName("dangerDeleteButton")
         self.delete_button.clicked.connect(self._delete_selected_account)
-        self.delete_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.delete_button.setFixedWidth(210)
+        self.delete_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_buttons_layout.addWidget(self.delete_button)
+        action_buttons_layout.addStretch(1)
 
         self.action_buttons_widget = QWidget(self.main_panel)
         self.action_buttons_widget.setLayout(action_buttons_layout)
@@ -603,6 +955,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self.account_list)
             item.setSizeHint(QSize(260, 112))
             widget = AccountItemWidget(account, self.account_list)
+            widget.code_clicked.connect(lambda item_row=storage_index: self._on_sidebar_code_clicked(item_row))
             self.account_list.setItemWidget(item, widget)
 
         if self.account_list.count() > 0:
@@ -639,11 +992,12 @@ class MainWindow(QMainWindow):
         self._scan_active = True
         self.add_account_button.setEnabled(False)
         self.hide()
-        self._scan_overlay = ScanOverlay()
-        self._scan_overlay.qr_detected.connect(self._process_qr_payload)
-        self._scan_overlay.scan_cancelled.connect(self._on_scan_cancelled)
-        self._scan_overlay.destroyed.connect(self._on_scan_overlay_closed)
-        self._scan_overlay.show()
+        overlay = ScanOverlay()
+        self._scan_overlay = overlay
+        overlay.qr_detected.connect(self._process_qr_payload)
+        overlay.scan_cancelled.connect(self._on_scan_cancelled)
+        overlay.destroyed.connect(lambda _obj=None, source=overlay: self._on_scan_overlay_closed(source))
+        overlay.show()
 
     def _end_scan_session(self) -> None:
         self._scan_active = False
@@ -694,9 +1048,15 @@ class MainWindow(QMainWindow):
         if reason and reason not in {"Scan cancelled", "Selection too small"}:
             self._show_status(self._format_scan_error(reason), is_error=True, timeout=6000)
 
-    def _on_scan_overlay_closed(self, _obj=None) -> None:
+    def _on_scan_overlay_closed(self, source: ScanOverlay | None = None) -> None:
+        if source is not None and source is not self._scan_overlay:
+            return
+
         if self._scan_active:
             self._end_scan_session()
+
+        if source is None or source is self._scan_overlay:
+            self._scan_overlay = None
 
     def _add_manual_account(self) -> None:
         dialog = QDialog(self)
@@ -726,8 +1086,58 @@ class MainWindow(QMainWindow):
         layout.addLayout(form)
 
         save_button = QPushButton("Save", dialog)
+        save_button.setObjectName("manualSaveButton")
         save_button.clicked.connect(dialog.accept)
         layout.addWidget(save_button)
+
+        if self._current_theme == "light":
+            dialog.setStyleSheet(
+                """
+                QDialog { background-color: #f6f9fd; border: 1px solid #c8d5e6; border-radius: 12px; }
+                QLabel { color: #1f3147; font-weight: 600; }
+                QLineEdit {
+                    background-color: #edf3fa;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 8px;
+                    padding: 7px 10px;
+                    color: #24364a;
+                }
+                QLineEdit:focus { border-color: #7ea5d2; }
+                QPushButton#manualSaveButton {
+                    background-color: #3f7cc8;
+                    border: 1px solid #2f67ad;
+                    border-radius: 10px;
+                    padding: 9px 14px;
+                    color: #ffffff;
+                    font-weight: 700;
+                }
+                QPushButton#manualSaveButton:hover { background-color: #336eb8; }
+                """
+            )
+        else:
+            dialog.setStyleSheet(
+                """
+                QDialog { background-color: #05070a; border: 1px solid #22344d; border-radius: 12px; }
+                QLabel { color: #e8f0ff; font-weight: 600; }
+                QLineEdit {
+                    background-color: #132135;
+                    border: 1px solid #2c4870;
+                    border-radius: 8px;
+                    padding: 7px 10px;
+                    color: #e8f0ff;
+                }
+                QLineEdit:focus { border-color: #6ea8fe; }
+                QPushButton#manualSaveButton {
+                    background-color: #2f67ad;
+                    border: 1px solid #4f89ce;
+                    border-radius: 10px;
+                    padding: 9px 14px;
+                    color: #ffffff;
+                    font-weight: 700;
+                }
+                QPushButton#manualSaveButton:hover { background-color: #3b76c1; }
+                """
+            )
 
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -774,11 +1184,114 @@ class MainWindow(QMainWindow):
         elif selected == delete_action:
             self._delete_account(storage_index)
 
+    def _on_sidebar_code_clicked(self, storage_index: int) -> None:
+        if storage_index < 0 or storage_index >= len(self._storage.accounts):
+            return
+
+        if storage_index in self._visible_account_indices:
+            self.account_list.setCurrentRow(self._visible_account_indices.index(storage_index))
+
+        self._copy_code_for_storage_index(storage_index)
+
     def _rename_account(self, row: int) -> None:
         existing_name = self._storage.accounts[row].get("name", "Account")
-        new_name, accepted = QInputDialog.getText(self, "Rename Account", "New name", text=existing_name)
-        if not accepted or not new_name.strip():
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Rename Account")
+        dialog.setModal(True)
+        dialog.resize(380, 150)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        label = QLabel("New name", dialog)
+        layout.addWidget(label)
+
+        name_input = QLineEdit(dialog)
+        name_input.setText(str(existing_name))
+        name_input.selectAll()
+        layout.addWidget(name_input)
+
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addStretch(1)
+        cancel_button = QPushButton("Cancel", dialog)
+        save_button = QPushButton("Save", dialog)
+        save_button.setObjectName("renameSaveButton")
+        cancel_button.clicked.connect(dialog.reject)
+        save_button.clicked.connect(dialog.accept)
+        buttons_layout.addWidget(cancel_button)
+        buttons_layout.addWidget(save_button)
+        layout.addLayout(buttons_layout)
+
+        if self._current_theme == "light":
+            dialog.setStyleSheet(
+                """
+                QDialog { background-color: #f6f9fd; border: 1px solid #c8d5e6; border-radius: 12px; }
+                QLabel { color: #1f3147; font-weight: 600; }
+                QLineEdit {
+                    background-color: #edf3fa;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 8px;
+                    padding: 7px 10px;
+                    color: #24364a;
+                }
+                QLineEdit:focus { border-color: #7ea5d2; }
+                QPushButton {
+                    background-color: #e3ecf8;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 9px;
+                    padding: 7px 12px;
+                    color: #21354b;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #d8e5f4; border-color: #9fb8d7; }
+                QPushButton#renameSaveButton {
+                    background-color: #3f7cc8;
+                    border: 1px solid #2f67ad;
+                    color: #ffffff;
+                }
+                QPushButton#renameSaveButton:hover { background-color: #336eb8; }
+                """
+            )
+        else:
+            dialog.setStyleSheet(
+                """
+                QDialog { background-color: #05070a; border: 1px solid #22344d; border-radius: 12px; }
+                QLabel { color: #e8f0ff; font-weight: 600; }
+                QLineEdit {
+                    background-color: #132135;
+                    border: 1px solid #2c4870;
+                    border-radius: 8px;
+                    padding: 7px 10px;
+                    color: #e8f0ff;
+                }
+                QLineEdit:focus { border-color: #6ea8fe; }
+                QPushButton {
+                    background-color: #132135;
+                    border: 1px solid #2c4870;
+                    border-radius: 9px;
+                    padding: 7px 12px;
+                    color: #f1f6ff;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #1b314d; border-color: #406a9f; }
+                QPushButton#renameSaveButton {
+                    background-color: #2f67ad;
+                    border: 1px solid #4f89ce;
+                    color: #ffffff;
+                }
+                QPushButton#renameSaveButton:hover { background-color: #3b76c1; }
+                """
+            )
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+
+        new_name = name_input.text().strip()
+        if not new_name:
+            return
+
         self._storage.rename_account(row, new_name)
         self._load_accounts_to_list()
         self.account_list.setCurrentRow(row)
@@ -789,8 +1302,30 @@ class MainWindow(QMainWindow):
         if confirmation_dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
+        if not self._confirm_delete_pin():
+            return
+
         self._storage.delete_account(row)
         self._load_accounts_to_list()
+
+    def _confirm_delete_pin(self) -> bool:
+        if not self._storage.pin_enabled:
+            QMessageBox.warning(
+                self,
+                "PIN Required",
+                "Set a 4-digit PIN in Settings to enable secure account deletion.",
+            )
+            return False
+
+        dialog = PinConfirmDialog(theme=self._current_theme, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+
+        if not self._storage.verify_pin(dialog.pin_value()):
+            QMessageBox.warning(self, "Incorrect PIN", "Incorrect PIN. Account not deleted.")
+            return False
+
+        return True
 
     def _copy_selected_code(self) -> None:
         storage_index = self._storage_index_for_row(self.account_list.currentRow())
@@ -812,7 +1347,32 @@ class MainWindow(QMainWindow):
         if clipboard is not None:
             clipboard.setText(code)
 
-        self.statusBar().showMessage("Code copied to clipboard", 1800)
+        self._play_copy_success_feedback()
+
+    def _play_copy_success_feedback(self) -> None:
+        self.copy_button.setText("Copied ✓")
+        self.copy_button.setProperty("copySuccess", True)
+        self.copy_button.style().unpolish(self.copy_button)
+        self.copy_button.style().polish(self.copy_button)
+        self.copy_button.update()
+
+        if self._copy_pulse_animation is not None:
+            base_rect = self.copy_button.geometry()
+            pulse_rect = base_rect.adjusted(-4, -2, 4, 2)
+            self._copy_pulse_animation.stop()
+            self._copy_pulse_animation.setStartValue(base_rect)
+            self._copy_pulse_animation.setKeyValueAt(0.5, pulse_rect)
+            self._copy_pulse_animation.setEndValue(base_rect)
+            self._copy_pulse_animation.start()
+
+        self._copy_feedback_timer.start(1200)
+
+    def _reset_copy_button_feedback(self) -> None:
+        self.copy_button.setText("Copy Code")
+        self.copy_button.setProperty("copySuccess", False)
+        self.copy_button.style().unpolish(self.copy_button)
+        self.copy_button.style().polish(self.copy_button)
+        self.copy_button.update()
 
     def _safe_totp(self, account: dict[str, Any]) -> tuple[str, int]:
         try:
@@ -837,14 +1397,15 @@ class MainWindow(QMainWindow):
     def _sync_main_display(self, row: int) -> None:
         storage_index = self._storage_index_for_row(row)
         if storage_index is None:
+            self._copy_feedback_timer.stop()
+            self._reset_copy_button_feedback()
             self.current_service_label.setText("Select an account")
             self.current_account_label.setText("")
             self.large_code_label.setText("")
-            self.main_progress.setMaximum(30)
-            self.main_progress.set_smooth_value(0)
+            self.main_timer.set_countdown(30, 0)
             self.copy_button.setEnabled(False)
             self.delete_button.setEnabled(False)
-            self.main_progress.setVisible(False)
+            self.main_timer.setVisible(False)
             self.action_buttons_widget.setVisible(False)
             return
 
@@ -852,14 +1413,13 @@ class MainWindow(QMainWindow):
         code, remaining = self._safe_totp(account)
         period = int(account.get("period", 30) or 30)
 
-        self.current_service_label.setText(account.get("name", "Account"))
+        self.current_service_label.setText(_format_service_name(account.get("name", "Account")))
         self.current_account_label.setText(account.get("account", ""))
         self.large_code_label.setText(code)
-        self.main_progress.setMaximum(period)
-        self.main_progress.set_smooth_value(remaining)
+        self.main_timer.set_countdown(period, remaining)
         self.copy_button.setEnabled(True)
         self.delete_button.setEnabled(True)
-        self.main_progress.setVisible(True)
+        self.main_timer.setVisible(True)
         self.action_buttons_widget.setVisible(True)
 
     def _open_settings(self) -> None:
@@ -925,6 +1485,9 @@ class MainWindow(QMainWindow):
 
         unlock_dialog = PinUnlockDialog(theme=self._current_theme, parent=None)
         unlock_dialog.forgot_requested.connect(lambda: self._forgot_from_unlock(unlock_dialog))
+        unlock_dialog.pin_input.textChanged.connect(
+            lambda text, dialog=unlock_dialog: self._try_auto_unlock_from_pin_input(dialog, text)
+        )
 
         attempts = 0
         while True:
@@ -942,6 +1505,14 @@ class MainWindow(QMainWindow):
             unlock_dialog.show_error("Incorrect PIN")
             if attempts >= 5:
                 self._show_status("Too many failed PIN attempts", is_error=True, timeout=4000)
+
+    def _try_auto_unlock_from_pin_input(self, dialog: PinUnlockDialog, value: str) -> None:
+        pin = value.strip()
+        if len(pin) != 4 or not pin.isdigit():
+            return
+
+        if self._storage.verify_pin(pin):
+            dialog.accept()
 
     def _forgot_from_unlock(self, unlock_dialog: PinUnlockDialog) -> None:
         confirm = QMessageBox.warning(
@@ -962,22 +1533,55 @@ class MainWindow(QMainWindow):
         self._show_status("All accounts removed due to forgot PIN", is_error=True, timeout=5000)
 
     def _export_backup(self) -> None:
+        if not self._storage.accounts:
+            QMessageBox.warning(self, "Export Unavailable", "No OTP accounts available to export.")
+            return
+
         destination, _ = QFileDialog.getSaveFileName(self, "Export Backup", "authdeck-backup.json", "JSON (*.json)")
         if not destination:
             return
+
+        password_dialog = BackupPasswordDialog(
+            theme=self._current_theme,
+            title="Protect Backup",
+            confirm=True,
+            parent=self,
+        )
+        if password_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
         try:
-            self._storage.export_backup(Path(destination))
+            self._storage.export_backup(Path(destination), password_dialog.password_value())
         except Exception as error:  # noqa: BLE001
             QMessageBox.critical(self, "Export Failed", str(error))
             return
-        QMessageBox.information(self, "Export Complete", "Backup exported successfully.")
+        QMessageBox.information(self, "Export Complete", "Encrypted backup exported successfully.")
 
     def _import_backup(self) -> None:
         source, _ = QFileDialog.getOpenFileName(self, "Import Backup", "", "JSON (*.json)")
         if not source:
             return
+
+        source_path = Path(source)
+        password: str | None = None
+
         try:
-            self._storage.import_backup(Path(source))
+            if self._storage.is_backup_encrypted(source_path):
+                password_dialog = BackupPasswordDialog(
+                    theme=self._current_theme,
+                    title="Unlock Backup",
+                    confirm=False,
+                    parent=self,
+                )
+                if password_dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                password = password_dialog.password_value()
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.critical(self, "Import Failed", str(error))
+            return
+
+        try:
+            self._storage.import_backup(source_path, password=password)
         except Exception as error:  # noqa: BLE001
             QMessageBox.critical(self, "Import Failed", str(error))
             return
@@ -995,14 +1599,27 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
             return
 
-        for row, account in enumerate(self._storage.accounts):
+        total_accounts = len(self._storage.accounts)
+        visible_count = min(total_accounts, MAX_TRAY_COPY_ITEMS)
+
+        for row in range(visible_count):
+            account = self._storage.accounts[row]
             code, _ = self._safe_totp(account)
-            title = f"{account.get('name', 'Account')}: {code}"
+            title = f"{_format_service_name(account.get('name', 'Account'))}: {code}"
             action = self.codes_menu.addAction(title)
             action.triggered.connect(lambda _checked=False, item_row=row: self._copy_code_for_storage_index(item_row))
 
-    def _apply_theme(self, theme: str) -> None:
+        if total_accounts > visible_count:
+            self.codes_menu.addSeparator()
+            remaining = total_accounts - visible_count
+            more_action = self.codes_menu.addAction(f"+{remaining} more accounts (open app)")
+            more_action.setEnabled(False)
+
+    def _apply_theme(self, theme: str, persist: bool = True) -> None:
         self._current_theme = "dark" if theme.lower() != "light" else "light"
+        if persist:
+            self._storage.set_theme(self._current_theme)
+        self.main_timer.set_theme(self._current_theme)
 
         if self._current_theme == "dark":
             self.setStyleSheet(
@@ -1045,6 +1662,15 @@ class MainWindow(QMainWindow):
                 QPushButton:hover { background-color: #1b314d; border-color: #406a9f; }
                 QPushButton:pressed { background-color: #0f1b2a; }
                 QPushButton:disabled { background-color: #09111b; color: #55708f; border-color: #182536; }
+                QPushButton#primaryCopyButton[copySuccess="true"] {
+                    background-color: rgba(255, 255, 255, 0.16);
+                    border: 1px solid rgba(255, 255, 255, 0.42);
+                    color: #ffffff;
+                }
+                QPushButton#primaryCopyButton[copySuccess="true"]:hover {
+                    background-color: rgba(255, 255, 255, 0.22);
+                    border: 1px solid rgba(255, 255, 255, 0.54);
+                }
                 QProgressBar {
                     border: 1px solid #2f4f79;
                     border-radius: 10px;
@@ -1058,43 +1684,155 @@ class MainWindow(QMainWindow):
                         stop:0 #4a84c8, stop:1 #7eb4ff);
                     border-radius: 9px;
                 }
+                QProgressBar#secondaryProgress {
+                    border: 1px solid #2f4f79;
+                    border-radius: 10px;
+                    background-color: #050b13;
+                    padding: 1px;
+                    min-height: 16px;
+                }
+                QProgressBar#secondaryProgress::chunk {
+                    border-radius: 8px;
+                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5f97dc, stop:1 #8cbcff);
+                }
                 QMenu { background-color: #070d15; border: 1px solid #2f4c72; padding: 6px; }
                 QMenu::item { padding: 7px 20px; border-radius: 6px; }
                 QMenu::item:selected { background-color: #1f3552; }
-                QMessageBox { background-color: #000000; }
+                QMessageBox {
+                    background-color: #05070a;
+                    color: #e7eefb;
+                }
+                QMessageBox QLabel { color: #e7eefb; }
+                QMessageBox QPushButton {
+                    background-color: #132135;
+                    border: 1px solid #2c4870;
+                    border-radius: 9px;
+                    padding: 6px 14px;
+                    color: #f1f6ff;
+                    font-weight: 700;
+                    min-width: 72px;
+                }
+                QMessageBox QPushButton:hover { background-color: #1b314d; }
                 """
             )
         else:
             self.setStyleSheet(
                 """
-                QMainWindow { background-color: #f3f6fb; color: #1f2a35; }
-                QWidget { font-family: Segoe UI, Inter, Arial; font-size: 13px; color: #243242; }
-                #windowTitle { font-size: 22px; font-weight: 700; }
-                #logoLabel { font-size: 20px; font-weight: 700; color: #1f2a35; padding: 6px 4px; }
-                #sidebar, #mainPanel { background-color: #ffffff; border: 1px solid #d7e1eb; border-radius: 14px; }
-                QLabel#accountName { font-weight: 600; font-size: 13px; color: #1f2a35; }
-                QLabel#accountUser { color: #607286; font-size: 12px; }
-                QLabel#accountCode { color: #255ea8; font-size: 20px; font-weight: 700; }
-                QLabel#selectedService { font-size: 22px; font-weight: 700; color: #1f2a35; }
-                QLabel#selectedAccount { font-size: 13px; color: #607286; }
-                QLabel#largeCode { font-size: 56px; font-weight: 700; letter-spacing: 2px; color: #255ea8; }
-                QListWidget { background-color: #f9fbfd; border: 1px solid #d7e1eb; border-radius: 10px; padding: 8px; }
-                QListWidget::item { margin-bottom: 8px; border-radius: 10px; background: #ffffff; }
-                QListWidget::item:selected { background: #e8f0fb; }
-                QPushButton {
-                    background-color: #eff4fa; border: 1px solid #cfddea; border-radius: 9px;
-                    padding: 8px 14px; color: #1f2a35; font-weight: 600;
+                QMainWindow {
+                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #e8edf5, stop:1 #dbe5f3);
+                    color: #203144;
                 }
-                QPushButton:hover { background-color: #e6edf7; }
-                QPushButton:pressed { background-color: #dbe5f2; }
+                QWidget { font-family: Segoe UI, Inter, Arial; font-size: 13px; color: #25364a; }
+                #windowTitle { font-size: 22px; font-weight: 700; }
+                #logoLabel { font-size: 20px; font-weight: 700; color: #1f3147; padding: 6px 4px; }
+                #sidebar, #mainPanel {
+                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #f5f8fc, stop:1 #edf3fa);
+                    border: 1px solid #c8d5e6;
+                    border-radius: 14px;
+                }
+                QLabel#accountName { font-weight: 700; font-size: 13px; color: #1d3047; }
+                QLabel#accountUser { color: #5f738b; font-size: 12px; }
+                QLabel#accountCode { color: #285fa9; font-size: 20px; font-weight: 700; }
+                QLabel#selectedService { font-size: 22px; font-weight: 800; color: #1d3047; }
+                QLabel#selectedAccount { font-size: 13px; color: #5f738b; }
+                QLabel#largeCode { font-size: 56px; font-weight: 700; letter-spacing: 2px; color: #2b63ac; }
+                QListWidget {
+                    background-color: #f3f7fc;
+                    border: 1px solid #c9d8e9;
+                    border-radius: 10px;
+                    padding: 8px;
+                }
+                QListWidget::item {
+                    margin-bottom: 8px;
+                    border-radius: 10px;
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #e7eef8, stop:1 #dde8f5);
+                }
+                QListWidget::item:selected {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #d2e3f8, stop:1 #c4d9f2);
+                }
+                QPushButton {
+                    background-color: #e3ecf8;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 9px;
+                    padding: 8px 14px;
+                    color: #21354b;
+                    font-weight: 700;
+                }
+                QPushButton:hover { background-color: #d8e5f4; border-color: #9fb8d7; }
+                QPushButton:pressed { background-color: #cfdff1; }
+                QPushButton#topSettingsButton,
+                QPushButton#primaryAddButton,
+                QPushButton#primaryCopyButton {
+                    background-color: #3f7cc8;
+                    border: 1px solid #2f67ad;
+                    color: #ffffff;
+                }
+                QPushButton#topSettingsButton:hover,
+                QPushButton#primaryAddButton:hover,
+                QPushButton#primaryCopyButton:hover { background-color: #336eb8; }
+                QPushButton#primaryCopyButton[copySuccess="true"] {
+                    background-color: #16a34a;
+                    border: 1px solid #13803b;
+                    color: #ffffff;
+                }
+                QPushButton#primaryCopyButton[copySuccess="true"]:hover { background-color: #148f41; }
+                QPushButton#dangerDeleteButton {
+                    background-color: #ef4444;
+                    border: 1px solid #d83b3b;
+                    color: #ffffff;
+                }
+                QPushButton#dangerDeleteButton:hover { background-color: #dc2626; }
                 QProgressBar {
-                    border: 1px solid #c5d4e2; border-radius: 8px; background-color: #f2f7fc;
-                    text-align: center; height: 14px;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 8px;
+                    background-color: #edf3fa;
+                    text-align: center;
+                    height: 14px;
                 }
                 QProgressBar::chunk { background-color: #5b8cc4; border-radius: 7px; }
-                QMenu { background-color: #ffffff; border: 1px solid #cfddea; padding: 6px; }
+                QProgressBar#secondaryProgress {
+                    border: 1px solid #aec4df;
+                    border-radius: 10px;
+                    background-color: #e8f0f9;
+                    padding: 1px;
+                    min-height: 16px;
+                }
+                QProgressBar#secondaryProgress::chunk {
+                    border-radius: 8px;
+                    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5f97dc, stop:1 #7fb0e6);
+                }
+                QLineEdit {
+                    background-color: #edf3fa;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 8px;
+                    padding: 6px 9px;
+                    color: #25364a;
+                }
+                QLineEdit:focus { border-color: #7ea5d2; }
+                QMenu { background-color: #f5f8fc; border: 1px solid #b7cbe3; padding: 6px; }
                 QMenu::item { padding: 7px 20px; border-radius: 6px; }
-                QMenu::item:selected { background-color: #e8f0fb; }
+                QMenu::item:selected { background-color: #d8e6f7; }
+                QMessageBox {
+                    background-color: #f6f9fd;
+                    color: #1f3147;
+                }
+                QMessageBox QLabel { color: #1f3147; }
+                QMessageBox QPushButton {
+                    background-color: #e3ecf8;
+                    border: 1px solid #b7cbe3;
+                    border-radius: 9px;
+                    padding: 6px 14px;
+                    color: #21354b;
+                    font-weight: 700;
+                    min-width: 72px;
+                }
+                QMessageBox QPushButton:hover { background-color: #d8e5f4; border-color: #9fb8d7; }
                 """
             )
 
@@ -1117,9 +1855,6 @@ class MainWindow(QMainWindow):
             self._restore_window()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        if self._force_close:
-            event.accept()
-            return
-
-        event.ignore()
-        self._minimize_to_tray()
+        self._force_close = True
+        self.tray_icon.hide()
+        event.accept()

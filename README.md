@@ -29,4 +29,4 @@ Output: `installer/output/AuthDeck-Setup.exe`
 
 - Accounts are stored locally only.
 - App PIN is stored as salted PBKDF2 hash.
-- Local secrets file (`data/accounts.json`) is git-ignored.
+- Backup exports are encrypted with a user password (AES-256-GCM + PBKDF2 key derivation).
