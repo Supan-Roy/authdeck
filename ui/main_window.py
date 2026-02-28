@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QStandardPaths, QTimer, Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QClipboard, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QStandardPaths, QTimer, Qt, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QAction, QClipboard, QCloseEvent, QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -1480,8 +1480,14 @@ class MainWindow(QMainWindow):
         dialog.pin_setup_requested.connect(lambda: self._handle_pin_setup(dialog))
         dialog.pin_remove_requested.connect(lambda: self._handle_pin_remove(dialog))
         dialog.pin_forgot_requested.connect(lambda: self._handle_pin_forgot(dialog))
+        dialog.update_requested.connect(self._open_updates_page)
         dialog.about_requested.connect(self._show_about_dialog)
         dialog.exec()
+
+    def _open_updates_page(self) -> None:
+        updates_url = QUrl("https://www.supanroy.com/projects/authdeck-download")
+        if not QDesktopServices.openUrl(updates_url):
+            self._show_status("Unable to open update page.", is_error=True, timeout=4000)
 
     def _show_about_dialog(self) -> None:
         dialog = QDialog(self)

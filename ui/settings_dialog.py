@@ -21,6 +21,7 @@ class SettingsDialog(QDialog):
     pin_setup_requested = pyqtSignal()
     pin_remove_requested = pyqtSignal()
     pin_forgot_requested = pyqtSignal()
+    update_requested = pyqtSignal()
     about_requested = pyqtSignal()
 
     def __init__(self, current_theme: str, pin_enabled: bool, parent=None) -> None:
@@ -67,6 +68,11 @@ class SettingsDialog(QDialog):
         root_layout.addLayout(form_layout)
 
         footer_layout = QHBoxLayout()
+        self.update_button = QPushButton("Check for Updates", self)
+        self.update_button.setObjectName("updateMiniButton")
+        self.update_button.clicked.connect(self.update_requested.emit)
+        footer_layout.addWidget(self.update_button, 0)
+
         self.about_button = QPushButton("About", self)
         self.about_button.setObjectName("aboutMiniButton")
         self.about_button.clicked.connect(self.about_requested.emit)
@@ -117,7 +123,7 @@ class SettingsDialog(QDialog):
                     outline: 0;
                 }
                 QPushButton:hover { background-color: #e5edf8; }
-                QPushButton#aboutMiniButton, QPushButton#closeMiniButton {
+                QPushButton#updateMiniButton, QPushButton#aboutMiniButton, QPushButton#closeMiniButton {
                     padding: 6px 12px;
                     min-width: 72px;
                 }
@@ -143,7 +149,7 @@ class SettingsDialog(QDialog):
                     outline: 0;
                 }
                 QPushButton:hover { background-color: #1b314d; }
-                QPushButton#aboutMiniButton, QPushButton#closeMiniButton {
+                QPushButton#updateMiniButton, QPushButton#aboutMiniButton, QPushButton#closeMiniButton {
                     padding: 6px 12px;
                     min-width: 72px;
                 }
