@@ -9,6 +9,10 @@
 
 Professional desktop TOTP authenticator for Windows built with Python + PyQt6.
 
+## Download
+
+- https://www.supanroy.com/projects/authdeck-download
+
 ## Author
 
 - Developer: Supan Roy
