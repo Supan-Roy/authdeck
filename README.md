@@ -14,6 +14,16 @@ Professional desktop TOTP authenticator for Windows built with Python + PyQt6.
 - Developer: Supan Roy
 - Email: support@supanroy.com
 
+## Features
+
+- Add account by screen-region QR scan or manual entry
+- Parses `otpauth://` URLs automatically
+- Generates 6-digit TOTP codes with 30-second refresh
+- Copy code from main panel, sidebar context menu, or tray menu
+- Dark/light theme switch
+- Import/export backup JSON
+- Minimize-to-tray workflow
+
 ## Run from source
 
 ```powershell
